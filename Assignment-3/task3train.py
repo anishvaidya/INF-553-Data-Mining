@@ -30,14 +30,15 @@ def build_model(business_pearson_list: list) -> None:
 
 #%%
 def weighted_average(ratings_list: list) -> float:
-    average_rating = 0
-    divisor = 0
-    i = 1
-    for rating in ratings_list[::-1]:
-        average_rating += i * rating
-        divisor += i
-        i *= 0.8
-    return float(float(average_rating) / divisor)
+    # average_rating = 0
+    # divisor = 0
+    # i = 1
+    # for rating in ratings_list[::-1]:
+    #     average_rating += i * rating
+    #     divisor += i
+    #     i *= 0.3
+    # return float(float(average_rating) / divisor)
+    return ratings_list[-1]
     
 #%%
 def create_business_ratings_dict(business_ratings_list: list) -> dict:
@@ -72,7 +73,8 @@ def pearson_correlation(pair: tuple, i_dict: dict, j_dict: dict) -> float:
         w_ij = float(numerator) / float(denominator)
     except ZeroDivisionError:
         return float(0)
-    return w_ij    
+    # return round(w_ij, 10)
+    return w_ij
 
 #%%
 train_file = "data/train_review.json"
@@ -93,22 +95,24 @@ input_rdd = input_data.map(json.loads).map(lambda row: (row["business_id"], row[
 case - item based
 item - business
 '''
-
-# taking care of multiple reviews by same user - weighted average
-business_ratings_rdd = input_rdd.map(lambda x: ((x[0], x[1]), x[2])).groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().distinct().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], create_business_ratings_dict(x[1])))
-
-# multiple reviews not handled
-'''business_ratings_rdd = input_rdd.map(lambda x: (x[0], (x[1], x[2]))).groupByKey().distinct().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], create_business_ratings_dict(x[1])))'''
-
-business_ratings_rdd = business_ratings_rdd.filter(lambda x: len(x[1]) >= min_co_ratings)
-business_ratings_dict = business_ratings_rdd.collectAsMap()
-
-business_id_rdd = business_ratings_rdd.map(lambda x: x[0])
-business_pair_rdd = business_id_rdd.cartesian(business_id_rdd).filter(lambda x: x[0] < x[1]).filter(lambda x: filter_dissimilar_pairs(business_ratings_dict[x[0]].keys(), business_ratings_dict[x[1]].keys()))
-
-business_pearson_rdd = business_pair_rdd.map(lambda pair: (pair, pearson_correlation(pair, business_ratings_dict[pair[0]], business_ratings_dict[pair[1]]))).filter(lambda x: x[1] > 0)
-business_pearson_list = sorted(business_pearson_rdd.collect(), key = lambda x: (x[0][0], -x[1]), reverse = False)
-
-build_model(business_pearson_list)
+if cf_type == "item_based":
+    # taking care of multiple reviews by same user - weighted average
+    business_ratings_rdd = input_rdd.map(lambda x: ((x[0], x[1]), x[2])).groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().distinct().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], create_business_ratings_dict(x[1])))
+    
+    # multiple reviews not handled
+    ''''business_ratings_rdd = input_rdd.map(lambda x: (x[0], (x[1], x[2]))).groupByKey().distinct().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], create_business_ratings_dict(x[1])))'''
+    
+    business_ratings_rdd = business_ratings_rdd.filter(lambda x: len(x[1]) >= min_co_ratings)
+    business_ratings_dict = business_ratings_rdd.collectAsMap()
+    
+    business_id_rdd = business_ratings_rdd.map(lambda x: x[0])
+    business_pair_rdd = business_id_rdd.cartesian(business_id_rdd).filter(lambda x: x[0] < x[1]).filter(lambda x: filter_dissimilar_pairs(business_ratings_dict[x[0]].keys(), business_ratings_dict[x[1]].keys()))
+    
+    business_pearson_rdd = business_pair_rdd.map(lambda pair: (pair, pearson_correlation(pair, business_ratings_dict[pair[0]], business_ratings_dict[pair[1]]))).filter(lambda x: x[1] > 0)
+    business_pearson_list = sorted(business_pearson_rdd.collect(), key = lambda x: (x[0][0], -x[1]), reverse = False)
+    
+    build_model(business_pearson_list)
+elif cf_type == "user_based":
+    print ("\nImplement it bro!!!")
 sc.stop()
 print ("\nDuration:" + str(time.time() - start))
