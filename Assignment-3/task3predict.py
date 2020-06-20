@@ -143,7 +143,7 @@ hood_size = 7
 avg_business_rating = 3.823989
 #%%
 start = time.time()
-conf = SparkConf().setAppName("Task-3-train").set("spark.executor.memory", "4g")
+conf = SparkConf().setAppName("Task-3-predict").set("spark.executor.memory", "4g")
 sc = SparkContext(conf=conf)
 sc.setLogLevel("ERROR")
 
@@ -164,13 +164,13 @@ if cf_type == "item_based":
     
     predictions_rdd = test_file.map(lambda x: ((x[1], x[0]), new_predict(x[1], x[0]))).filter(lambda x: x[1] > 0)
     predictions_list = predictions_rdd.collect()
-    predictions_dict = predictions_rdd.collectAsMap()
+    # predictions_dict = predictions_rdd.collectAsMap()
     
     # testing rmse
     actual_ratings = sc.textFile(test_ratings_file).map(json.loads).map(lambda row: ((row["user_id"], row["business_id"]), row["stars"]))
     actual_ratings = actual_ratings.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1]))).collectAsMap()
     
-    print (str(calculate_rmse(predictions_dict)))
+    # print (str(calculate_rmse(predictions_dict)))
     build_model(predictions_list)
     sc.stop()
 

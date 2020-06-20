@@ -14,20 +14,107 @@ from pyspark import SparkConf, SparkContext
 from operator import add
 import string
 import math
+from itertools import combinations
 
 #%%
-def build_model(business_pearson_list: list) -> None:
+# =============================================================================
+# def build_model(pearson_list: list) -> None:
+#    with open(model_file, "w+") as file:
+#        if cf_type == "item_based":
+#            for pair in pearson_list:
+#              # file.write(pair[0][0] + "," + pair[0][1] + "," + str(pair[1]) + "\n")
+#              row_dict = {}
+#              row_dict["b1"] = pair[0][0]
+#              row_dict["b2"] = pair[0][1]
+#              row_dict["sim"] = pair[1]
+#              json.dump(row_dict, file)
+#              file.write("\n")
+#        elif cf_type == "user_based":
+#            for pair in pearson_list:
+#              # file.write(pair[0][0] + "," + pair[0][1] + "," + str(pair[1]) + "\n")
+#              row_dict = {}
+#              row_dict["u1"] = pair[0][0]
+#              row_dict["u2"] = pair[0][1]
+#              row_dict["sim"] = pair[1]
+#              json.dump(row_dict, file)
+#              file.write("\n")
+#    file.close()
+# =============================================================================
+   
+#%%
+def build_model(pearson_list: list) -> None:
    with open(model_file, "w+") as file:
-       for pair in business_pearson_list:
-         # file.write(pair[0][0] + "," + pair[0][1] + "," + str(pair[1]) + "\n")
-         row_dict = {}
-         row_dict["b1"] = pair[0][0]
-         row_dict["b2"] = pair[0][1]
-         row_dict["sim"] = pair[1]
-         json.dump(row_dict, file)
-         file.write("\n")
+       if cf_type == "item_based":
+           for pair in pearson_list:
+               row_dict = {}
+               row_dict["b1"] = pair[0][0]
+               row_dict["b2"] = pair[0][1]
+               row_dict["sim"] = pair[1]
+               json.dump(row_dict, file)
+               file.write("\n")
+       elif cf_type == "user_based":
+           for pair in pearson_list:
+               row_dict = {}
+               row_dict["u1"] = pair[0][0]
+               row_dict["u2"] = pair[0][1]
+               row_dict["sim"] = pair[1]
+               json.dump(row_dict, file)
+               file.write("\n")
+             
    file.close()
+      
+#%%
+def hash_fn1(x: int) -> int:
+    return ((x * 1997 + 15) % 37307) % n_buckets_for_sig
 
+
+def hash_fn2(x: int) -> int:
+    return ((x * 1997 + 15) % 37307) % n_buckets_for_sig
+
+#%%
+# Shingling
+def build_matrix(business_reviewed: dict, business_set: set) -> list:
+    column = list()
+    index = 0
+    business_reviewed_set = set(business_reviewed.keys())
+    for business in business_set:
+        if business in business_reviewed_set:
+            column.append(index)
+        index += 1
+    return column
+
+#%%
+# Min hashing
+def build_signatures(business_list: list, p: int, m: int) -> list:
+    signature_list = list()
+    for i in range(1, n_hashes + 1):
+        hash_value = list()
+        for business in business_list:
+            hash_value.append(((i * hash_fn1(business) + i * hash_fn2(business) + i * i) % p) % m)
+        signature_list.append(min(hash_value))
+    return signature_list  
+
+#%%  
+def build_candidates_from_bands(signature: tuple) -> list:
+    bucket_of_bands = list()
+    for i in range(bands):
+        row_data = signature[1][(rows * i): (rows * (i + 1))]
+        bucket_of_bands.append(((i, tuple(row_data)), signature[0]))
+        # bucket_of_bands.append(((i, tuple(row_data)), [signature[0]]))
+    return bucket_of_bands
+
+#%%
+def build_pairs(candidate_set: set) -> list:
+    return combinations(sorted(candidate_set), 2)
+
+#%%
+def jaccard_similarity(pair: tuple) -> float:
+    set_A = set(user_matrix_data[pair[0]])
+    set_B = set(user_matrix_data[pair[1]])
+    n_union = len(set_A.union(set_B))
+    n_intersection = len(set_A.intersection(set_B))
+    jaccard_similarity = float(float(n_intersection) / float(n_union))
+    return jaccard_similarity
 #%%
 def weighted_average(ratings_list: list) -> float:
     # average_rating = 0
@@ -78,14 +165,20 @@ def pearson_correlation(pair: tuple, i_dict: dict, j_dict: dict) -> float:
 
 #%%
 train_file = "data/train_review.json"
-model_file = "task3item.model"
-cf_type = "item_based"
+model_file = "task3user.model"
+cf_type = "user_based"
 min_co_ratings = 3
 
+#%%
+reqd_jaccard_similarity = 0.01
+n_hashes = 36
+bands = 36
+rows = n_hashes // bands
 #%%
 start = time.time()
 conf = SparkConf().setAppName("Task-3-train").set("spark.executor.memory", "4g")
 sc = SparkContext(conf=conf)
+sc.setLogLevel("ERROR")
 
 #%%
 input_data = sc.textFile(train_file, 4)
@@ -112,7 +205,32 @@ if cf_type == "item_based":
     business_pearson_list = sorted(business_pearson_rdd.collect(), key = lambda x: (x[0][0], -x[1]), reverse = False)
     
     build_model(business_pearson_list)
+ 
 elif cf_type == "user_based":
     print ("\nImplement it bro!!!")
+    user_rdd = input_rdd.map(lambda row: ((row[1], row[0]), row[2])).cache()
+    user_master_rdd = user_rdd.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1])))
+    business_set = set(sorted(input_rdd.map(lambda x: x[0]).distinct().collect()))
+    user_ratings_dict = user_master_rdd.collectAsMap()
+    n_buckets_for_sig = len(business_set)
+    
+    user_matrix = user_master_rdd.map(lambda x: (x[0], build_matrix(x[1], business_set)))
+    user_matrix_data = user_matrix.collectAsMap()
+    user_signature_matrix = user_matrix.map(lambda x: (x[0], build_signatures(x[1], 37307, n_buckets_for_sig)))
+    
+    bands_data = user_signature_matrix.flatMap(lambda row: build_candidates_from_bands(row))
+    bands_data = bands_data.groupByKey().map(lambda row: (row[0], set(row[1]))).filter(lambda row: len(row[1]) > 1)
+    candidate_pairs = bands_data.flatMap(lambda row: build_pairs(row[1])).distinct()
+    candidate_pairs = candidate_pairs.filter(lambda x: filter_dissimilar_pairs(user_matrix_data[x[0]], user_matrix_data[x[1]]))
+    j_similarity_rdd = candidate_pairs.map(lambda pair: (pair, jaccard_similarity(pair))).filter(lambda pair: pair[1] >= reqd_jaccard_similarity).map(lambda x: x[0])
+    # .map(lambda x: x[0]).filter(lambda x: filter_dissimilar_pairs(user_matrix_data[x[0]], user_matrix_data[x[1]]))
+    # j_similarity_list = sorted(j_similarity_list)
+    user_pearson_rdd = j_similarity_rdd.map(lambda pair: (pair, pearson_correlation(pair, user_ratings_dict[pair[0]], user_ratings_dict[pair[1]]))).filter(lambda x: x[1] > 0)
+    user_pearson_list = sorted(user_pearson_rdd.collect(), key = lambda x: (x[0][0], -x[1]), reverse = False)
+    
+    build_model(user_pearson_list)
+    
+    
+    
 sc.stop()
 print ("\nDuration:" + str(time.time() - start))
