@@ -15,7 +15,7 @@ import string
 import math
 
 #%%
-def build_model(predictions_rdd: list) -> None:
+def build_output(predictions_rdd: list) -> None:
    with open(output_file, "w+") as file:
        for pair in predictions_rdd:
          # file.write(pair[0][0] + "," + pair[0][1] + "," + str(pair[1]) + "\n")
@@ -77,31 +77,74 @@ def predict(user: str, item: str, neighbourhood: list) -> float:
 
 #%%
 def new_predict(user: str, item: str) -> float:
-    neighbourhood = list()
-    city = set(train_user_business_ratings[user].keys())
-    similarity_list = list()
-    for item_p in city:
-        pair = tuple(sorted([item, item_p]))
-        similarity = model.get(pair, 0)
-        similarity_list.append((item_p, similarity))
-    neighbourhood = sorted(similarity_list, key = lambda x: x[1], reverse = True)[:hood_size]
-    hood = [item[0] for item in neighbourhood]
-    numerator = 0.0
-    denominator = 0.0
-    for neighbor in hood:
-        pair = tuple(sorted([item, neighbor]))
-        numerator += train_user_business_ratings[user][neighbor] * model.get(pair, 0)
-        denominator += abs(model.get(pair, 0))
-        '''
-        wij = model.get(pair, 0) * (abs(model.get(pair, 0)) ** 1.5)
-        numerator += float(train_user_business_ratings[user][neighbor] * wij)
-        denominator += abs(float(wij))'''
-    try:
-        prediction = numerator / denominator
-    except ZeroDivisionError:
-        # return avg_business_rating
-        return 0
-    return prediction
+    if cf_type == "item_based":
+        hood_size = 7
+        neighbourhood = list()
+        city = set(train_user_business_ratings[user].keys())
+        similarity_list = list()
+        for item_p in city:
+            pair = tuple(sorted([item, item_p]))
+            similarity = model.get(pair, 0)
+            similarity_list.append((item_p, similarity))
+        neighbourhood = sorted(similarity_list, key = lambda x: x[1], reverse = True)[:hood_size]
+        hood = [item[0] for item in neighbourhood]
+        numerator = 0.0
+        denominator = 0.0
+        for neighbor in hood:
+            pair = tuple(sorted([item, neighbor]))
+            numerator += train_user_business_ratings[user][neighbor] * model.get(pair, 0)
+            denominator += abs(model.get(pair, 0))
+            ''' # case amplification
+            wij = model.get(pair, 0) * (abs(model.get(pair, 0)) ** 1.5)
+            numerator += float(train_user_business_ratings[user][neighbor] * wij)
+            denominator += abs(float(wij))'''
+        try:
+            prediction = numerator / denominator
+        except ZeroDivisionError:
+            # return avg_business_rating
+            return 0
+        return prediction
+    
+    elif cf_type == "user_based":
+        hood_size = 25
+        try:
+            city = set(train_business_user_ratings[item].keys())
+        except KeyError:
+            return 0
+        neighbourhood = list()
+        similarity_list = list()
+        for user_p in city:
+            pair = tuple(sorted([user, user_p]))
+            similarity = model.get(pair, 0)
+            similarity_list.append((user_p, similarity))
+        neighbourhood = sorted(similarity_list, key = lambda x: x[1], reverse = True)[:hood_size]
+        hood = [item[0] for item in neighbourhood]
+        numerator = 0.0
+        denominator = 0.0
+        a_user_avg = float(sum(train_user_business_ratings[user].values()) / len(train_user_business_ratings[user].values()))
+        if len(hood) < 3:
+            return a_user_avg
+        for user_p in hood:
+            co_rated_items = set(train_user_business_ratings[user].keys()).intersection(set(train_user_business_ratings[user_p].keys()))
+            if len(co_rated_items) != 0:
+                user_p_co_rating_sum = 0.0
+                for co_item in co_rated_items:
+                    user_p_co_rating_sum += train_user_business_ratings[user_p][co_item]
+                user_p_avg = user_p_co_rating_sum / len(co_rated_items)
+            else:
+                user_p_avg = 0
+            pair = tuple(sorted([user, user_p]))
+            numerator += (train_user_business_ratings[user_p][item] - user_p_avg) * model.get(pair, 0)
+            denominator += abs(model.get(pair, 0))
+        try:
+            expression = numerator / denominator
+        except ZeroDivisionError:
+            expression = 0
+            # return 0
+        prediction = a_user_avg + expression
+        if prediction < 2.8 and prediction < a_user_avg:
+            return a_user_avg  
+        return prediction
     
 #%%
 def calculate_rmse(predictions_dict: dict) -> float:
@@ -134,9 +177,16 @@ def calculate_rmse(predictions_dict: dict) -> float:
 train_file = "data/train_review.json"
 test_file = "data/test_review.json"
 test_ratings_file = "data/test_review_ratings.json"
-model_file = "task3item.model"
-output_file = "task3item.predict"
-cf_type = "item_based"
+model_file = "task3user.model"
+output_file = "task3user.predict"
+cf_type = "user_based"
+'''
+train_file = sys.argv[1]
+test_file = sys.argv[2]
+test_ratings_file = "data/test_review_ratings.json"
+model_file = sys.argv[3]
+output_file = sys.argv[4]
+cf_type = sys.argv[5]'''
 
 business_avg_file = "data/business_avg.json"
 hood_size = 7
@@ -147,16 +197,15 @@ conf = SparkConf().setAppName("Task-3-predict").set("spark.executor.memory", "4g
 sc = SparkContext(conf=conf)
 sc.setLogLevel("ERROR")
 
+test_file = sc.textFile(test_file)
+test_file = test_file.map(json.loads).map(lambda row: (row["business_id"], row["user_id"]))
+
+train_data = sc.textFile(train_file)
+train_data = train_data.map(json.loads).map(lambda row: ((row["user_id"], row["business_id"]), row["stars"])).cache()
+train_user_business_ratings = train_data.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1]))).collectAsMap()
+
 if cf_type == "item_based":
     model = sc.textFile(model_file).map(json.loads).map(lambda row: ((row["b1"], row["b2"]), row["sim"])).collectAsMap()
-    
-    train_data = sc.textFile(train_file)
-    train_data = train_data.map(json.loads).map(lambda row: ((row["user_id"], row["business_id"]), row["stars"])).cache()
-    train_user_business_ratings = train_data.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1]))).collectAsMap()
-    
-    
-    test_file = sc.textFile(test_file)
-    test_file = test_file.map(json.loads).map(lambda row: (row["business_id"], row["user_id"]))
     
     # x[0] = business, x[1] = user
     '''neighborhood_rdd = test_file.map(lambda x: (x[1], x[0], generate_neighbourhood(x[1], x[0], hood_size))).map(lambda x: (x[0], x[1], [item_p[0] for item_p in x[2]]))
@@ -171,10 +220,20 @@ if cf_type == "item_based":
     actual_ratings = actual_ratings.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1]))).collectAsMap()
     
     # print (str(calculate_rmse(predictions_dict)))
-    build_model(predictions_list)
-    sc.stop()
+    build_output(predictions_list)
+    
 
 elif cf_type == "user_based":
     print ("\n Implement this bro")
+    model = sc.textFile(model_file).map(json.loads).map(lambda row: ((row["u1"], row["u2"]), row["sim"])).collectAsMap()
+    train_business_user_ratings = train_data.map(lambda x: ((x[0][1], x[0][0]), x[1]))
+    train_business_user_ratings = train_business_user_ratings.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1]))).collectAsMap()
     
+    predictions_rdd = test_file.map(lambda x: ((x[1], x[0]), new_predict(x[1], x[0]))).filter(lambda x: x[1] > 0)
+    predictions_list = predictions_rdd.collect()
+    
+    build_output(predictions_list)
+    
+    
+sc.stop()   
 print ("\nDuration:" + str(time.time() - start))

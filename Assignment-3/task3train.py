@@ -117,14 +117,15 @@ def jaccard_similarity(pair: tuple) -> float:
     return jaccard_similarity
 #%%
 def weighted_average(ratings_list: list) -> float:
-    # average_rating = 0
-    # divisor = 0
-    # i = 1
-    # for rating in ratings_list[::-1]:
-    #     average_rating += i * rating
-    #     divisor += i
-    #     i *= 0.3
-    # return float(float(average_rating) / divisor)
+    '''
+    average_rating = 0
+    divisor = 0
+    i = 1
+    for rating in ratings_list[::-1]:
+        average_rating += i * rating
+        divisor += i
+        i *= 1.0
+    return float(float(average_rating) / divisor)'''
     return ratings_list[-1]
     
 #%%
@@ -167,12 +168,17 @@ def pearson_correlation(pair: tuple, i_dict: dict, j_dict: dict) -> float:
 train_file = "data/train_review.json"
 model_file = "task3user.model"
 cf_type = "user_based"
+'''
+train_file = sys.argv[1]
+model_file = sys.argv[2]
+cf_type = sys.argv[3]'''
+
 min_co_ratings = 3
 
 #%%
 reqd_jaccard_similarity = 0.01
-n_hashes = 36
-bands = 36
+n_hashes = 38
+bands = 38
 rows = n_hashes // bands
 #%%
 start = time.time()
@@ -208,6 +214,7 @@ if cf_type == "item_based":
  
 elif cf_type == "user_based":
     print ("\nImplement it bro!!!")
+    '''
     user_rdd = input_rdd.map(lambda row: ((row[1], row[0]), row[2])).cache()
     user_master_rdd = user_rdd.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], weighted_average(x[1])))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1])))
     business_set = set(sorted(input_rdd.map(lambda x: x[0]).distinct().collect()))
@@ -225,6 +232,27 @@ elif cf_type == "user_based":
     j_similarity_rdd = candidate_pairs.map(lambda pair: (pair, jaccard_similarity(pair))).filter(lambda pair: pair[1] >= reqd_jaccard_similarity).map(lambda x: x[0])
     # .map(lambda x: x[0]).filter(lambda x: filter_dissimilar_pairs(user_matrix_data[x[0]], user_matrix_data[x[1]]))
     # j_similarity_list = sorted(j_similarity_list)
+    user_pearson_rdd = j_similarity_rdd.map(lambda pair: (pair, pearson_correlation(pair, user_ratings_dict[pair[0]], user_ratings_dict[pair[1]]))).filter(lambda x: x[1] > 0)
+    user_pearson_list = sorted(user_pearson_rdd.collect(), key = lambda x: (x[0][0], -x[1]), reverse = False)
+    
+    build_model(user_pearson_list)
+    '''
+    user_rdd = input_rdd.map(lambda row: ((row[1], row[0]), row[2])).cache()
+    user_master_rdd = user_rdd.groupByKey().map(lambda x: (x[0], list(x[1]))).map(lambda x: (x[0][0], (x[0][1], x[1][-1]))).groupByKey().map(lambda x: (x[0], set(x[1]))).map(lambda x: (x[0], dict((k, v) for k, v in x[1])))
+    user_master_rdd = user_master_rdd.filter(lambda x: len(x[1]) >= min_co_ratings)
+    business_set = set(sorted(input_rdd.map(lambda x: x[0]).distinct().collect()))
+    user_ratings_dict = user_master_rdd.collectAsMap()
+    n_buckets_for_sig = len(business_set)
+    
+    user_matrix = user_master_rdd.map(lambda x: (x[0], build_matrix(x[1], business_set)))
+    user_matrix_data = user_matrix.collectAsMap()
+    user_signature_matrix = user_matrix.map(lambda x: (x[0], build_signatures(x[1], 37307, n_buckets_for_sig)))
+    
+    bands_data = user_signature_matrix.flatMap(lambda row: build_candidates_from_bands(row))
+    bands_data = bands_data.groupByKey().map(lambda row: (row[0], set(row[1]))).filter(lambda row: len(row[1]) > 1)
+    candidate_pairs = bands_data.flatMap(lambda row: build_pairs(row[1])).distinct()
+    candidate_pairs = candidate_pairs.filter(lambda x: filter_dissimilar_pairs(user_matrix_data[x[0]], user_matrix_data[x[1]]))
+    j_similarity_rdd = candidate_pairs.map(lambda pair: (pair, jaccard_similarity(pair))).filter(lambda pair: pair[1] >= reqd_jaccard_similarity).map(lambda x: x[0])
     user_pearson_rdd = j_similarity_rdd.map(lambda pair: (pair, pearson_correlation(pair, user_ratings_dict[pair[0]], user_ratings_dict[pair[1]]))).filter(lambda x: x[1] > 0)
     user_pearson_list = sorted(user_pearson_rdd.collect(), key = lambda x: (x[0][0], -x[1]), reverse = False)
     
