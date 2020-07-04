@@ -137,7 +137,8 @@ def detect_communities(betweenness_list: list, vertex_dict: dict):
     configuration["best_config"] = None
     while len(betweenness_list_copy):
         communities = generate_communities(list(vertex_dict_copy.keys()), vertex_dict_copy)
-        modularity = get_modularity(vertex_dict_copy, communities, edge_count)
+        # modularity = get_modularity(vertex_dict_copy, communities, edge_count)
+        modularity = get_modularity(vertex_dict, communities, edge_count)
         if modularity > configuration["max_modularity"]:
             configuration["max_modularity"] = modularity
             configuration["best_config"] = communities
@@ -189,10 +190,10 @@ def filter_dissimilar_users(user_1: str, user_2: str)-> bool:
         return True
 
 #%%
-filter_threshold = 7
-input_file_path = "data/ub_sample_data.csv"
+filter_threshold = 4
+input_file_path = "data/test_task2_user_business.csv"
 betweenness_output_file_path = "task2_betweenness.output"
-community_output_file_path = "task2_community.output"
+community_output_file_path = "task2_community_new.output"
 '''
 filter_threshold = int(sys.argv[1])
 input_file_path = sys.argv[2]
