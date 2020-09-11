@@ -137,8 +137,7 @@ def detect_communities(betweenness_list: list, vertex_dict: dict):
     configuration["best_config"] = None
     while len(betweenness_list_copy):
         communities = generate_communities(list(vertex_dict_copy.keys()), vertex_dict_copy)
-        # modularity = get_modularity(vertex_dict_copy, communities, edge_count)
-        modularity = get_modularity(vertex_dict, communities, edge_count)
+        modularity = get_modularity(vertex_dict_copy, communities, edge_count)
         if modularity > configuration["max_modularity"]:
             configuration["max_modularity"] = modularity
             configuration["best_config"] = communities
